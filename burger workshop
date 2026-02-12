@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>McDonald's Tycoon - Realismo Pro</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Inter', sans-serif; }
+        #crosshair {
+            position: fixed;
+            top: 50%; left: 50%;
+            width: 4px; height: 4px;
+            background: white;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            z-index: 100;
+            mix-blend-mode: difference;
+        }
+        
+        /* HUD Superior - Menú de Pedidos */
+        #order-strip {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 15px;
+            z-index: 50;
+        }
+        .order-card {
+            background: rgba(255, 255, 255, 0.9);
+            color: #da291c;
+            padding: 8px 15px;
+            border-radius: 8px;
+            font-weight: 800;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+            border-bottom: 4px solid #ffc72c;
+            animation: slideIn 0.3s ease-out;
+            min-width: 100px;
+            text-align: center;
+        }
+
+        @keyframes slideIn { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+        /* Admin Panel Stylized */
+        #admin-panel {
+            position: fixed;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            width: 500px;
+            background: #1a1a1a;
+            border: 2px solid #ffc72c;
+            box-shadow: 0 0 30px rgba(255, 199, 44, 0.2);
+            color: white;
+            padding: 2rem;
+            z-index: 500;
+            display: none;
+            border-radius: 12px;
+        }
+
+        .mcd-btn {
+            background: #ffc72c;
+            color: #272727;
+            font-weight: bold;
+            padding: 10px 20px;
+            border-radius: 6px;
+            transition: all 0.2s;
+            cursor: pointer;
+            text-transform: uppercase;
+        }
+        .mcd-btn:hover { transform: scale(1.05); background: #f0b924; }
+
+        #main-menu {
+            position: fixed;
+            inset: 0;
+            background: url('https://images.unsplash.com/photo-1552566626-52f8b828add9?auto=format&fit=crop&q=80&w=2070') center/cover;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        #menu-overlay {
+            background: rgba(0,0,0,0.7);
+            position: absolute; inset: 0;
+        }
+        #menu-content {
+            position: relative;
+            z-index: 1001;
+            text-align: center;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="main-menu">
+        <div id="menu-overlay"></div>
+        <div id="menu-content">
+            <h1 class="text-7xl font-black italic mb-2 text-[#ffc72c]">M</h1>
+            <h2 class="text-4xl font-black mb-8 uppercase tracking-widest">McTycoon <span class="text-red-500">Realism</span></h2>
+            <button onclick="startGame()" class="mcd-btn text-2xl px-12 py-4">Entrar al Turno</button>
+            <p class="mt-4 text-gray-400 text-sm">Presiona 'M' para el Panel de Administración dentro del juego</p>
+        </div>
+    </div>
+
+    <div id="crosshair"></div>
+    <div id="order-strip"></div>
+    
+    <!-- HUD -->
+    <div id="hud" style="display: none;">
+        <div class="fixed bottom-8 left-8 bg-black/80 backdrop-blur-md p-6 rounded-xl border-l-8 border-yellow-400">
+            <p class="text-[10px] text-yellow-400 font-bold uppercase tracking-widest">Fondos de Sucursal</p>
+            <h3 class="text-4xl font-black text-white">€<span id="cash-val">0.00</span></h3>
+        </div>
+        <div class="fixed bottom-8 right-8 bg-black/80 backdrop-blur-md p-6 rounded-xl border-r-8 border-red-500 text-right">
+            <p class="text-[10px] text-red-500 font-bold uppercase tracking-widest">Inventario Actual</p>
+            <h3 id="inv-status" class="text-2xl font-black text-white italic uppercase">Brazos Vacíos</h3>
+        </div>
+    </div>
+
+    <!-- Admin Panel -->
+    <div id="admin-panel">
+        <h2 class="text-2xl font-black mb-6 border-b border-white/10 pb-2">GERENCIA: ADMIN PANEL</h2>
+        <div class="space-y-4">
+            <div class="flex justify-between items-center">
+                <span>Inyectar Capital:</span>
+                <button onclick="addCash(10000)" class="mcd-btn bg-green-600 text-white">+€10,000</button>
+            </div>
+            <div class="flex justify-between items-center">
+                <span>Modo Rush (Spawn):</span>
+                <input type="range" min="1" max="10" value="1" oninput="rushSpeed = this.value" class="accent-yellow-400">
+            </div>
+            <button onclick="serveAll()" class="mcd-btn w-full bg-blue-600 text-white mt-4">Servir a todos los clientes</button>
+            <button onclick="closeAdmin()" class="mcd-btn w-full bg-red-600 text-white mt-2">Cerrar Consola</button>
+        </div>
+    </div>
+
+    <script>
+        let scene, camera, renderer, raycaster;
+        let isLocked = false;
+        let cash = 0;
+        let inventory = null;
+        let rushSpeed = 1;
+        let customers = [];
+        let interactables = [];
+        let moveState = { f: 0, b: 0, l: 0, r: 0 };
+        let yaw = 0, pitch = 0;
+
+        const ITEMS = {
+            BURGER: { name: 'Big Mac', color: 0x633918, emissive: 0x3d220f },
+            FRIES: { name: 'Patatas Grandes', color: 0xffcc00, emissive: 0x443300 },
+            DRINK: { name: 'Coca-Cola', color: 0x111111, emissive: 0x220000 }
+        };
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0a0a);
+            scene.fog = new THREE.FogExp2(0x0a0a0a, 0.04);
+
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.body.appendChild(renderer.domElement);
+
+            raycaster = new THREE.Raycaster();
+
+            setupLighting();
+            setupWorld();
+            setupControls();
+            
+            animate();
+        }
+
+        function setupLighting() {
+            const ambient = new THREE.AmbientLight(0xffffff, 0.2);
+            scene.add(ambient);
+
+            // Luces de techo de restaurante (Focalizadas)
+            for(let i = -1; i <= 1; i++) {
+                const light = new THREE.PointLight(0xfff5d7, 1.2, 15);
+                light.position.set(i * 5, 4, 0);
+                light.castShadow = true;
+                scene.add(light);
+                
+                // Representación física de la lámpara
+                const lamp = new THREE.Mesh(
+                    new THREE.CylinderGeometry(0.3, 0.5, 0.2, 16),
+                    new THREE.MeshStandardMaterial({ color: 0x333333 })
+                );
+                lamp.position.set(i * 5, 4.9, 0);
+                scene.add(lamp);
+            }
+        }
+
+        function setupWorld() {
+            // Suelo con reflejos (Realismo)
+            const floorGeo = new THREE.PlaneGeometry(100, 100);
+            const floorMat = new THREE.MeshStandardMaterial({ 
+                color: 0x1a1a1a, 
+                roughness: 0.1, 
+                metalness: 0.5 
+            });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.rotation.x = -Math.PI/2;
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            // Estructura del Local
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+            
+            // Pared Trasera (Cocina)
+            const backWall = new THREE.Mesh(new THREE.BoxGeometry(25, 6, 0.5), wallMat);
+            backWall.position.set(0, 3, -8);
+            scene.add(backWall);
+
+            // El Mostrador Principal
+            const counter = new THREE.Mesh(
+                new THREE.BoxGeometry(15, 1.2, 1.5),
+                new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.8, roughness: 0.2 })
+            );
+            counter.position.set(0, 0.6, 2);
+            counter.castShadow = true;
+            counter.receiveShadow = true;
+            scene.add(counter);
+
+            // Pantallas de Menú sobre el mostrador
+            const menuGeo = new THREE.BoxGeometry(4, 2, 0.1);
+            const menuMat = new THREE.MeshStandardMaterial({ color: 0xda291c, emissive: 0xda291c, emissiveIntensity: 0.5 });
+            const menuBoard = new THREE.Mesh(menuGeo, menuMat);
+            menuBoard.position.set(0, 4, -7.8);
+            scene.add(menuBoard);
+
+            // Mesas para clientes
+            createTable(-7, 5);
+            createTable(7, 5);
+            createTable(-7, 10);
+            createTable(7, 10);
+
+            // Estaciones de Trabajo
+            createStation(-5, -6, ITEMS.BURGER, "Parrilla Big Mac");
+            createStation(0, -6, ITEMS.FRIES, "Freidora de Patatas");
+            createStation(5, -6, ITEMS.DRINK, "Surtidor de Bebidas");
+        }
+
+        function createTable(x, z) {
+            const top = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 0.1, 32), new THREE.MeshStandardMaterial({ color: 0x333333 }));
+            top.position.set(x, 1, z);
+            top.castShadow = true;
+            scene.add(top);
+            
+            const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1, 8), new THREE.MeshStandardMaterial({ color: 0x111111 }));
+            leg.position.set(x, 0.5, z);
+            scene.add(leg);
+        }
+
+        function createStation(x, z, item, label) {
+            const base = new THREE.Mesh(
+                new THREE.BoxGeometry(2.5, 1.1, 2.5),
+                new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.9, roughness: 0.1 })
+            );
+            base.position.set(x, 0.55, z);
+            scene.add(base);
+
+            // Parte superior interactiva
+            const machine = new THREE.Mesh(
+                new THREE.BoxGeometry(1.8, 0.8, 1.8),
+                new THREE.MeshStandardMaterial({ 
+                    color: item.color, 
+                    emissive: item.emissive, 
+                    emissiveIntensity: 1 
+                })
+            );
+            machine.position.set(x, 1.3, z);
+            machine.userData = { isStation: true, item: item };
+            interactables.push(machine);
+            scene.add(machine);
+        }
+
+        function startGame() {
+            document.getElementById('main-menu').style.display = 'none';
+            document.getElementById('hud').style.display = 'block';
+            camera.position.set(0, 1.7, 12);
+            document.body.requestPointerLock();
+            spawnLoop();
+        }
+
+        function spawnLoop() {
+            if(customers.length < 8) spawnCustomer();
+            setTimeout(spawnLoop, 5000 / rushSpeed);
+        }
+
+        function spawnCustomer() {
+            const keys = Object.keys(ITEMS);
+            const want = ITEMS[keys[Math.floor(Math.random() * keys.length)]];
+            const id = 'cust-' + Math.random();
+
+            const group = new THREE.Group();
+            
+            // Cuerpo más realista
+            const body = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.35, 0.4, 1.4, 12),
+                new THREE.MeshStandardMaterial({ color: Math.random() * 0xffffff })
+            );
+            body.position.y = 0.7;
+            group.add(body);
+
+            // Cabeza
+            const head = new THREE.Mesh(
+                new THREE.SphereGeometry(0.25, 16, 16),
+                new THREE.MeshStandardMaterial({ color: 0xffdbac })
+            );
+            head.position.y = 1.6;
+            group.add(head);
+
+            group.position.set((Math.random()-0.5)*12, 0, 30);
+            group.userData = { isCustomer: true, id: id, want: want.name };
+            
+            // El cuerpo es el que recibe el raycast
+            body.userData = group.userData;
+            body.parentObj = group; // Referencia para borrar
+            
+            scene.add(group);
+            customers.push(group);
+            interactables.push(body);
+
+            // UI del pedido
+            const div = document.createElement('div');
+            div.id = id;
+            div.className = 'order-card';
+            div.innerHTML = `<span class="text-[8px] block opacity-50">Mesa ${Math.floor(Math.random()*10)}</span>${want.name}`;
+            document.getElementById('order-strip').appendChild(div);
+
+            const speed = 0.05 * (rushSpeed * 0.5 + 0.5);
+            const walk = setInterval(() => {
+                if(group.position.z > 4.5) {
+                    group.position.z -= speed;
+                } else {
+                    clearInterval(walk);
+                }
+            }, 20);
+        }
+
+        function removeCustomer(obj) {
+            const data = obj.userData || obj.parentObj.userData;
+            const div = document.getElementById(data.id);
+            if(div) div.remove();
+            
+            const group = obj.parentObj || obj;
+            scene.remove(group);
+            
+            customers = customers.filter(c => c !== group);
+            interactables = interactables.filter(i => i.userData.id !== data.id);
+        }
+
+        function handleInteraction() {
+            raycaster.setFromCamera(new THREE.Vector2(0,0), camera);
+            const hits = raycaster.intersectObjects(interactables);
+            
+            if(hits.length > 0) {
+                const obj = hits[0].object;
+                if(obj.userData.isStation) {
+                    inventory = obj.userData.item;
+                    document.getElementById('inv-status').innerText = inventory.name;
+                    document.getElementById('inv-status').style.color = "#ffc72c";
+                } else if(obj.userData.isCustomer && inventory) {
+                    if(obj.userData.want === inventory.name) {
+                        cash += 22.50; // ¡Precio premium por realismo!
+                        updateCashUI();
+                        removeCustomer(obj);
+                        inventory = null;
+                        document.getElementById('inv-status').innerText = "Brazos Vacíos";
+                        document.getElementById('inv-status').style.color = "white";
+                    }
+                }
+            }
+        }
+
+        function setupControls() {
+            document.addEventListener('keydown', (e) => {
+                const key = e.code;
+                if(key === 'KeyW') moveState.f = 1;
+                if(key === 'KeyS') moveState.b = 1;
+                if(key === 'KeyA') moveState.l = 1;
+                if(key === 'KeyD') moveState.r = 1;
+                if(key === 'KeyM') toggleAdmin();
+            });
+            document.addEventListener('keyup', (e) => {
+                const key = e.code;
+                if(key === 'KeyW') moveState.f = 0;
+                if(key === 'KeyS') moveState.b = 0;
+                if(key === 'KeyA') moveState.l = 0;
+                if(key === 'KeyD') moveState.r = 0;
+            });
+            document.addEventListener('mousemove', (e) => {
+                if(isLocked) {
+                    yaw -= e.movementX * 0.002;
+                    pitch -= e.movementY * 0.002;
+                    pitch = Math.max(-1.4, Math.min(1.4, pitch));
+                    camera.quaternion.setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+                }
+            });
+            document.addEventListener('pointerlockchange', () => {
+                isLocked = document.pointerLockElement === document.body;
+            });
+            window.addEventListener('mousedown', () => { if(isLocked) handleInteraction(); });
+        }
+
+        function updateCashUI() { document.getElementById('cash-val').innerText = cash.toFixed(2); }
+        function addCash(v) { cash += v; updateCashUI(); }
+        function serveAll() {
+            [...customers].forEach(c => {
+                if(c.position.z <= 5) {
+                    cash += 20;
+                    removeCustomer(c);
+                }
+            });
+            updateCashUI();
+        }
+        function toggleAdmin() {
+            const p = document.getElementById('admin-panel');
+            p.style.display = p.style.display === 'block' ? 'none' : 'block';
+            if(p.style.display === 'block') document.exitPointerLock();
+        }
+        function closeAdmin() { document.getElementById('admin-panel').style.display = 'none'; document.body.requestPointerLock(); }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if(isLocked) {
+                const speed = 0.14;
+                const fwd = new THREE.Vector3(0,0,-1).applyEuler(new THREE.Euler(0, yaw, 0));
+                const side = new THREE.Vector3(1,0,0).applyEuler(new THREE.Euler(0, yaw, 0));
+                if(moveState.f) camera.position.addScaledVector(fwd, speed);
+                if(moveState.b) camera.position.addScaledVector(fwd, -speed);
+                if(moveState.l) camera.position.addScaledVector(side, -speed);
+                if(moveState.r) camera.position.addScaledVector(side, speed);
+                camera.position.y = 1.7;
+            }
+            renderer.render(scene, camera);
+        }
+
+        window.onload = init;
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
